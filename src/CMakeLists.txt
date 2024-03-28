@@ -1,10 +1,4 @@
 file(GLOB_RECURSE FILES *.c *.cpp *.h *.hpp *.pio)
-file(GLOB_RECURSE LIB_SOURCES
-    ${CMAKE_ROOT_DIR}/lib/*.c
-    ${CMAKE_ROOT_DIR}/lib/*.cpp
-    ${CMAKE_ROOT_DIR}/lib/*.h
-    ${CMAKE_ROOT_DIR}/lib/*.hpp
-)
 
 add_executable(${PROJECT} ${FILES} ${LIB_SOURCES})
 
@@ -20,9 +14,11 @@ target_include_directories(${PROJECT} PUBLIC
 
 target_link_libraries(${PROJECT}
     pico_stdlib
-    pico_runtime
     pico_cyw43_arch_none
+    pico_bootrom
+    pico_malloc
+    pico_runtime
+    hardware_pwm
+    hardware_i2c
     hardware_spi
-    hardware_clocks
-    hardware_watchdog
 )
