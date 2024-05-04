@@ -12,7 +12,7 @@ else()
     message("PICO_SDK_PATH already set ('${PICO_SDK_PATH}')")
 endif()
 
-set(PICO_BOARD pico_w)
+set(PICO_BOARD pico)
 
 #
 # Include pico_sdk_import.cmake from pico-sdk
