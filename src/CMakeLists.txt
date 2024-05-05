@@ -10,6 +10,7 @@ target_include_directories(${PROJECT} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_ROOT_DIR}/include
     ${CMAKE_ROOT_DIR}/lib
+    ${CMAKE_ROOT_DIR}
 )
 
 target_link_libraries(${PROJECT}

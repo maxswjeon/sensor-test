@@ -1,191 +1,239 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <pico/stdlib.h>
 #include <pico/bootrom.h>
-#include <pico/cyw43_arch.h>
-#include <pico/malloc.h>
+#include <hardware/i2c.h>
 
-#include <hardware/spi.h>
+// #include <firmware/BHI360.h>
+#include <firmware/BHI360_cmd.h>
 
-#include "bosch/firmware/bhi360/BHI360_BMM350C.fw.h"
+#define I2C_INST i2c0
+#define I2C_SDA 0
+#define I2C_SCL 1
 
-#define SPI0_SCK_PIN 2
-#define SPI0_MOSI_PIN 3
-#define SPI0_MISO_PIN 4
-#define SPI0_CS_PIN 5
+#define SENSOR_ADDR 0x29
 
-bool spi_turbo_speed(spi_inst_t *inst)
+void i2c_setup()
 {
-	uint8_t payload[8];
-	memset(payload, 0, 8);
-
-	payload[0] = 0x00;
-	payload[1] = 0x17;
-	payload[2] = 0x02;
-	payload[3] = 0x00;
-	payload[4] = 0x80;
-	payload[5] = 0x00;
-	payload[6] = 0x00;
-	payload[7] = 0x00;
-
-	spi_write_blocking(inst, payload, 8);
-
-	spi_read_blocking(inst, 0x00, payload, 8);
-
-	bool check[8];
-	check[0] = payload[0] == 0x0F;
-	check[1] = payload[1] == 0x00;
-	check[2] = payload[2] == 0x04;
-	check[3] = payload[3] == 0x00;
-	check[4] = payload[4] == 0x17;
-	check[5] = payload[5] == 0x00;
-	check[6] = payload[6] == 0x00;
-	check[7] = payload[7] == 0x00;
-
-	return check[0] && check[1] && check[2] && check[3] && check[4] && check[5] && check[6] && check[7];
+	i2c_init(I2C_INST, 1600 * 1000);
+	gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+	gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+	gpio_pull_up(I2C_SDA);
+	gpio_pull_up(I2C_SCL);
 }
 
-int load_firmware(spi_inst_t *inst, const uint8_t *firmware, uint16_t length)
+void i2c_read(uint8_t address, uint8_t reg, uint8_t *data, size_t len)
 {
-	printf("Firmware length: %d\n", length);
-
-	uint8_t *payload = (uint8_t *)malloc(length + 4);
-	memset(payload, 0, length + 4);
-	payload[0] = 0x00;
-	payload[1] = 0x02;
-	payload[2] = (uint8_t)((length >> 8) & 0xFF);
-	payload[3] = (uint8_t)(length & 0xFF);
-	memcpy(payload + 4, firmware, length);
-
-	spi_write_blocking(inst, payload, length + 4);
-
-	free(payload);
-
-	return 0;
+	i2c_write_blocking(i2c0, address, &reg, 1, true);
+	i2c_read_blocking(i2c0, address, data, len, false);
 }
 
-int boot_firmware(spi_inst_t *inst)
+void i2c_write(uint8_t address, uint8_t reg, uint8_t *data, size_t len)
 {
-	uint8_t payload[4];
-	memset(payload, 0, 4);
-
-	payload[0] = 0x00;
-	payload[1] = 0x03;
-	payload[2] = 0x00;
-	payload[3] = 0x00;
-
-	spi_write_blocking(inst, payload, 4);
-
-	return 0;
+	uint8_t *buf = (uint8_t *)malloc(len + 1);
+	buf[0] = reg;
+	memcpy(buf + 1, data, len);
+	i2c_write_blocking(i2c0, address, buf, len + 1, false);
+	free(buf);
 }
 
-int self_test(spi_inst_t *inst)
+void reset_sensor()
 {
-	uint8_t payload[8];
-	memset(payload, 0, 8);
+	uint8_t data = 0x01;
+	i2c_write(SENSOR_ADDR, 0x14, &data, 1);
 
-	payload[0] = 0x00;
-	payload[1] = 0x0B;
-	payload[2] = 0x00;
-	payload[3] = 0x04;
-	payload[4] = 0x01;
-	payload[5] = 0x00;
-	payload[6] = 0x00;
-	payload[7] = 0x00;
-
-	spi_write_blocking(inst, payload, 8);
-
-	return 0;
+	sleep_ms(100);
 }
 
-void check_error(spi_inst_t *inst)
+void setup_interrupt()
 {
-	int index = 0;
-	uint8_t resp = 0;
+	uint8_t data = 0x01;
+	i2c_write(SENSOR_ADDR, 0x15, &data, 1);
+}
+
+uint8_t chip_id()
+{
+	uint8_t data;
+	i2c_read(SENSOR_ADDR, 0x2B, &data, 1);
+	return data;
+}
+
+void set_turbo(bool enable)
+{
+	uint8_t data = enable ? 0x00 : 0x01;
+	i2c_write(SENSOR_ADDR, 0x05, &data, 1);
+}
+
+uint8_t get_boot_status()
+{
+	uint8_t data;
+	i2c_read(SENSOR_ADDR, 0x25, &data, 1);
+	return data;
+}
+
+void pause()
+{
 	while (true)
 	{
-		spi_read_blocking(spi0, 0x00, &resp, 1);
-
-		printf("0x%02X\t", resp);
-
-		if (index++ == 7)
+		int read = getchar_timeout_us(1000);
+		if (read != PICO_ERROR_TIMEOUT)
 		{
-			printf("\n");
-			index = 0;
+			while (read != PICO_ERROR_TIMEOUT)
+			{
+				printf("%c", read);
+				read = getchar_timeout_us(10);
+			}
+			return;
 		}
-
-		if (resp == 0x00)
-		{
-			break;
-		}
+		printf("Press any key to continue...\n");
+		sleep_ms(1000);
 	}
-	printf("\n");
 }
 
-void check_error(spi_inst_t *inst, uint32_t length)
+void poll_boot_status(bool check_ready, bool check_verify, uint64_t print_ms = 1000, uint64_t max_tries = 10000)
 {
-	uint32_t index = 0;
-	uint8_t resp = 0;
-	while (index < length)
+	uint64_t last = 0;
+	for (uint64_t i = 0; i < max_tries; i++)
 	{
-		spi_read_blocking(spi0, 0x00, &resp, 1);
+		uint8_t status = get_boot_status();
 
-		printf("0x%02X\t", resp);
+		bool interface = (status & 0x10) != 0;
+		bool loading = (status & 0x20) == 0;
+		bool verify = (status & 0x40) == 0;
+		bool running = (status & 0x80) == 0;
 
-		if (index++ % 8 == 7)
+		if (time_us_64() - last > print_ms * 1000)
 		{
-			printf("\n");
+			printf("Boot Status: 0x%02X\n", status);
+			printf("\tInterface: %s\n", (status & 0x10) ? "Ready" : "Not Ready");
+			if (loading)
+			{
+				printf("\tFirmware: Verification in Progress\n");
+			}
+			else if (verify)
+			{
+				printf("\tFirmware: Verification Success\n");
+			}
+			else
+			{
+				printf("\tFirmware: Verification Failed\n");
+			}
+			printf("\tFirmware State: %s\n\n", (status & 0x80) ? "Halted" : "Running");
+			last = time_us_64();
+		}
+
+		if (check_verify && !loading && verify)
+		{
+			return;
+		}
+
+		if (check_ready && interface)
+		{
+			return;
 		}
 	}
-	printf("\n");
+}
+
+uint8_t get_fuser2_identifier()
+{
+	uint8_t data;
+	i2c_read(SENSOR_ADDR, 0x1C, &data, 1);
+	return data;
+}
+
+uint8_t get_fuser2_revision()
+{
+	uint8_t data;
+	i2c_read(SENSOR_ADDR, 0x1D, &data, 1);
+	return data;
+}
+
+uint16_t get_rom_version()
+{
+	uint8_t data[2];
+	i2c_read(SENSOR_ADDR, 0x1E, data, 1);
+	i2c_read(SENSOR_ADDR, 0x1F, data + 1, 1);
+
+	uint16_t version = (data[1] << 8) | data[0];
+	return version;
+}
+
+void upload_firmware(uint8_t *data, size_t len)
+{
+	// uint8_t buf[32];
+
+	// buf[0] = 0x00;
+	// buf[1] = 0x02;
+
+	// // Length Endianess is important
+	// buf[2] = (len / 4 >> 8) & 0xFF;
+	// buf[3] = (len / 4) & 0xFF;
+
+	// i2c_write_blocking(I2C_INST, SENSOR_ADDR, buf, 4, false);
+
+	// printf("\n");
+	// size_t offset = 0;
+	// while (offset < len)
+	// {
+	// 	memset(buf, 0, 32);
+	// 	size_t target = len - offset > 32 ? 32 : len - offset;
+
+	// 	memcpy(buf + 2, data + offset, target);
+	// 	i2c_write_blocking(I2C_INST, SENSOR_ADDR, buf, target, false);
+	// 	offset += target;
+
+	// 	printf("\rUploading Firmware: %d%% (%d bytes / %d bytes)", (offset * 100) / len, offset, len);
+	// }
+	// printf("\n");
+
+	i2c_write_blocking(I2C_INST, SENSOR_ADDR, data, len, false);
 }
 
 int main()
 {
 	stdio_init_all();
 
-	if (cyw43_arch_init())
+	pause();
+
+	i2c_setup();
+
+	printf("Issuing Sensor Reset\n\n");
+	reset_sensor();
+	sleep_ms(100);
+
+	uint8_t id = chip_id();
+	while (id != 0x7A)
 	{
-		printf("Failed to initialize WiFi module\n");
-
-		reset_usb_boot(0, 0);
-		return 0;
+		printf("Error: Invalid Chip ID 0x%02X, expected 0x7A\n", id);
+		reset_sensor();
+		sleep_ms(100);
+		id = chip_id();
 	}
+	printf("Chip ID: 0x%02X\n\n", id);
 
-	sleep_ms(10000);
+	printf("Setting Turbo Mode\n\n");
+	set_turbo(true);
 
-	printf("Starting...\n");
+	printf("Checking Interface Status\n");
+	poll_boot_status(true, false);
 
-	spi_init(spi0, 1 * 1000 * 1000);
-	gpio_set_function(SPI0_SCK_PIN, GPIO_FUNC_SPI);
-	gpio_set_function(SPI0_MOSI_PIN, GPIO_FUNC_SPI);
-	gpio_set_function(SPI0_MISO_PIN, GPIO_FUNC_SPI);
+	printf("Fuser2 Identifier: 0x%02X\n", get_fuser2_identifier());
+	printf("Fuser2 Revision: 0x%02X\n", get_fuser2_revision());
+	printf("ROM Version: 0x%04X\n\n", get_rom_version());
 
-	gpio_init(SPI0_CS_PIN);
-	gpio_set_dir(SPI0_CS_PIN, GPIO_OUT);
-	gpio_put(SPI0_CS_PIN, 1);
+	printf("Uploading Firmware\n");
+	// upload_firmware(BHI360_fw, BHI360_fw_len);
+	upload_firmware(BHI360_cmd, BHI360_cmd_len);
 
-	// Load firmware
-	printf("Loading firmware...\n");
+	printf("Checking Firmware Verification\n");
+	poll_boot_status(false, true);
 
-	uint64_t length = sizeof(bhy2_firmware_image) / 4;
-	load_firmware(spi0, bhy2_firmware_image, (uint8_t)length);
-	printf("Firmware loaded\n");
-	check_error(spi0, 8);
+	sleep_ms(3000);
 
-	// Boot firmware
-	printf("Booting firmware...\n");
-	boot_firmware(spi0);
-	printf("Firmware booted\n");
-	check_error(spi0, 8);
+	printf("Checking Firmware Verification\n");
+	poll_boot_status(false, true);
 
-	// Self test
-	printf("Self test...\n");
-	self_test(spi0);
-	printf("Self test done\n");
-	check_error(spi0, 5);
-
-	while (true)
-		;
+	reset_usb_boot(0, 0);
 }
