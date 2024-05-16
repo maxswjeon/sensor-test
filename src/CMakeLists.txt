@@ -19,7 +19,10 @@ target_link_libraries(${PROJECT}
     pico_bootrom
     pico_malloc
     pico_runtime
+    pico_multicore
+    pico_sync
     hardware_pwm
     hardware_i2c
     hardware_spi
+    hardware_watchdog
 )
